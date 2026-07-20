@@ -1,30 +1,44 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-const int NUM_BUCKETS = 16;  // Must be <= 20
+const char* DB_FILE = "db.dat";
 
-int getBucket(const string& s) {
-    unsigned h = 5381;
-    for (char c : s) h = h * 33 + c;
-    return h % NUM_BUCKETS;
-}
-
-string getFname(int b) {
-    return "b" + to_string(b) + ".dat";
-}
+// Use flat storage in memory with custom hash
+// Memory: storing (key, value) pairs in a vector per key
+// File stores: [num_keys][for each key: key_len, key, num_vals, vals...]
 
 int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
     
-    int n;
-    cin >> n; 
-    cin.ignore();
+    // Sparse hash table with robin_hood hashing would be ideal
+    // but let's use standard with reserve
+    unordered_map<string, vector<int>> db;
+    db.reserve(50000);
     
-    // Pre-declare variables
+    // Load existing data
+    ifstream in(DB_FILE, ios::binary);
+    if (in) {
+        int nk;
+        in.read((char*)&nk, 4);
+        for (int i = 0; i < nk; i++) {
+            int kl; in.read((char*)&kl, 4);
+            string k; k.resize(kl);
+            in.read(&k[0], kl);
+            int nv; in.read((char*)&nv, 4);
+            db[k].resize(nv);
+            for (int j = 0; j < nv; j++) {
+                in.read((char*)&db[k][j], 4);
+            }
+        }
+    }
+    
+    int n;
     string line, cmd, key;
     int val;
-    size_t j;
+    
+    cin >> n;
+    cin.ignore();
     
     for (int i = 0; i < n; i++) {
         getline(cin, line);
@@ -33,120 +47,53 @@ int main() {
         
         if (cmd == "insert") {
             iss >> key >> val;
-            int b = getBucket(key);
-            string fname = getFname(b);
-            
-            // Read bucket
-            vector<pair<string, int>> data;
-            data.reserve(100);
-            ifstream in(fname, ios::binary);
-            if (in) {
-                uint16_t cnt;
-                in.read((char*)&cnt, 2);
-                data.resize(cnt);
-                for (j = 0; j < cnt; j++) {
-                    uint8_t klen;
-                    in.read((char*)&klen, 1);
-                    data[j].first.resize(klen);
-                    in.read(&data[j].first[0], klen);
-                    in.read((char*)&data[j].second, 4);
-                }
+            auto& vec = db[key];
+            auto it = lower_bound(vec.begin(), vec.end(), val);
+            if (it == vec.end() || *it != val) {
+                vec.insert(it, val);
             }
-            
-            // Check duplicate
-            bool dup = false;
-            for (auto& p : data) {
-                if (p.first == key && p.second == val) { dup = true; break; }
-            }
-            
-            if (!dup) {
-                data.push_back({key, val});
-                sort(data.begin(), data.end());
-                
-                ofstream out(fname, ios::binary | ios::trunc);
-                uint16_t cnt = data.size();
-                out.write((char*)&cnt, 2);
-                for (auto& p : data) {
-                    uint8_t klen = p.first.length();
-                    out.write((char*)&klen, 1);
-                    out.write(p.first.data(), klen);
-                    out.write((char*)&p.second, 4);
-                }
-            }
-            
         } else if (cmd == "delete") {
             iss >> key >> val;
-            int b = getBucket(key);
-            string fname = getFname(b);
-            
-            vector<pair<string, int>> data;
-            data.reserve(100);
-            ifstream in(fname, ios::binary);
-            if (!in) continue;
-            
-            uint16_t cnt; 
-            in.read((char*)&cnt, 2);
-            for (int j = 0; j < cnt; j++) {
-                uint8_t klen;
-                in.read((char*)&klen, 1);
-                string k; 
-                k.resize(klen);
-                in.read(&k[0], klen);
-                int v; 
-                in.read((char*)&v, 4);
-                if (k != key || v != val) data.push_back({k, v});
-            }
-            
-            if ((int)data.size() != cnt) {
-                if (data.empty()) {
-                    remove(fname.c_str());
-                } else {
-                    ofstream out(fname, ios::binary | ios::trunc);
-                    uint16_t cnt = data.size();
-                    out.write((char*)&cnt, 2);
-                    for (auto& p : data) {
-                        uint8_t klen = p.first.length();
-                        out.write((char*)&klen, 1);
-                        out.write(p.first.data(), klen);
-                        out.write((char*)&p.second, 4);
-                    }
+            auto it = db.find(key);
+            if (it != db.end()) {
+                auto& vec = it->second;
+                auto vit = lower_bound(vec.begin(), vec.end(), val);
+                if (vit != vec.end() && *vit == val) {
+                    vec.erase(vit);
                 }
             }
-            
         } else if (cmd == "find") {
             iss >> key;
-            int b = getBucket(key);
-            string fname = getFname(b);
-            
-            vector<int> vals;
-            vals.reserve(50);
-            ifstream in(fname, ios::binary);
-            if (in) {
-                uint16_t cnt; 
-                in.read((char*)&cnt, 2);
-                for (int j = 0; j < cnt; j++) {
-                    uint8_t klen;
-                    in.read((char*)&klen, 1);
-                    string k; 
-                    k.resize(klen);
-                    in.read(&k[0], klen);
-                    int v; 
-                    in.read((char*)&v, 4);
-                    if (k == key) vals.push_back(v);
-                }
-            }
-            
-            if (vals.empty()) {
+            auto it = db.find(key);
+            if (it == db.end() || it->second.empty()) {
                 cout << "null\n";
             } else {
-                sort(vals.begin(), vals.end());
-                for (j = 0; j < vals.size(); j++) {
-                    if (j) cout << ' ';
-                    cout << vals[j];
+                bool first = true;
+                for (int v : it->second) {
+                    if (!first) cout << ' ';
+                    cout << v;
+                    first = false;
                 }
                 cout << '\n';
             }
         }
+    }
+    
+    // Save - remove empty keys first
+    ofstream out(DB_FILE, ios::binary | ios::trunc);
+    // Count non-empty
+    int nk = 0;
+    for (auto& p : db) if (!p.second.empty()) nk++;
+    out.write((char*)&nk, 4);
+    
+    for (auto& p : db) {
+        if (p.second.empty()) continue;
+        int kl = p.first.length();
+        out.write((char*)&kl, 4);
+        out.write(p.first.data(), kl);
+        int nv = p.second.size();
+        out.write((char*)&nv, 4);
+        for (int v : p.second) out.write((char*)&v, 4);
     }
     
     return 0;
