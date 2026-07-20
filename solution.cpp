@@ -3,33 +3,33 @@ using namespace std;
 
 const char* DB_FILE = "db.dat";
 
-// Use flat storage in memory with custom hash
-// Memory: storing (key, value) pairs in a vector per key
-// File stores: [num_keys][for each key: key_len, key, num_vals, vals...]
+struct Entry {
+    string key;
+    int value;
+};
+
+bool operator<(const Entry& a, const Entry& b) {
+    if (a.key != b.key) return a.key < b.key;
+    return a.value < b.value;
+}
 
 int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
     
-    // Sparse hash table with robin_hood hashing would be ideal
-    // but let's use standard with reserve
-    unordered_map<string, vector<int>> db;
-    db.reserve(50000);
+    vector<Entry> entries;
+    entries.reserve(100000);
     
     // Load existing data
     ifstream in(DB_FILE, ios::binary);
     if (in) {
-        int nk;
-        in.read((char*)&nk, 4);
-        for (int i = 0; i < nk; i++) {
+        int n; in.read((char*)&n, 4);
+        entries.resize(n);
+        for (int i = 0; i < n; i++) {
             int kl; in.read((char*)&kl, 4);
-            string k; k.resize(kl);
-            in.read(&k[0], kl);
-            int nv; in.read((char*)&nv, 4);
-            db[k].resize(nv);
-            for (int j = 0; j < nv; j++) {
-                in.read((char*)&db[k][j], 4);
-            }
+            entries[i].key.resize(kl);
+            in.read(&entries[i].key[0], kl);
+            in.read((char*)&entries[i].value, 4);
         }
     }
     
@@ -47,53 +47,47 @@ int main() {
         
         if (cmd == "insert") {
             iss >> key >> val;
-            auto& vec = db[key];
-            auto it = lower_bound(vec.begin(), vec.end(), val);
-            if (it == vec.end() || *it != val) {
-                vec.insert(it, val);
+            auto it = lower_bound(entries.begin(), entries.end(), Entry{key, val});
+            if (it == entries.end() || it->key != key || it->value != val) {
+                entries.insert(it, Entry{key, val});
             }
+            
         } else if (cmd == "delete") {
             iss >> key >> val;
-            auto it = db.find(key);
-            if (it != db.end()) {
-                auto& vec = it->second;
-                auto vit = lower_bound(vec.begin(), vec.end(), val);
-                if (vit != vec.end() && *vit == val) {
-                    vec.erase(vit);
-                }
+            auto it = lower_bound(entries.begin(), entries.end(), Entry{key, val});
+            if (it != entries.end() && it->key == key && it->value == val) {
+                entries.erase(it);
             }
+            
         } else if (cmd == "find") {
             iss >> key;
-            auto it = db.find(key);
-            if (it == db.end() || it->second.empty()) {
-                cout << "null\n";
-            } else {
-                bool first = true;
-                for (int v : it->second) {
-                    if (!first) cout << ' ';
-                    cout << v;
-                    first = false;
-                }
-                cout << '\n';
+            // Find first occurrence with binary search
+            auto it = lower_bound(entries.begin(), entries.end(), Entry{key, 0},
+                [](const Entry& a, const Entry& b) { return a.key < b.key; });
+            
+            bool first = true;
+            bool found = false;
+            while (it != entries.end() && it->key == key) {
+                if (!first) cout << ' ';
+                cout << it->value;
+                first = false;
+                found = true;
+                ++it;
             }
+            if (!found) cout << "null";
+            cout << '\n';
         }
     }
     
-    // Save - remove empty keys first
+    // Save
     ofstream out(DB_FILE, ios::binary | ios::trunc);
-    // Count non-empty
-    int nk = 0;
-    for (auto& p : db) if (!p.second.empty()) nk++;
-    out.write((char*)&nk, 4);
-    
-    for (auto& p : db) {
-        if (p.second.empty()) continue;
-        int kl = p.first.length();
+    int cnt = entries.size();
+    out.write((char*)&cnt, 4);
+    for (auto& e : entries) {
+        int kl = e.key.length();
         out.write((char*)&kl, 4);
-        out.write(p.first.data(), kl);
-        int nv = p.second.size();
-        out.write((char*)&nv, 4);
-        for (int v : p.second) out.write((char*)&v, 4);
+        out.write(e.key.data(), kl);
+        out.write((char*)&e.value, 4);
     }
     
     return 0;
